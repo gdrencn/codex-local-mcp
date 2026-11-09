@@ -1,0 +1,42 @@
+{
+  "name": "codex-local-mcp",
+  "version": "0.1.0",
+  "description": "Parallel local Codex workers through a small stdio MCP server",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gdrencn/codex-local-mcp.git"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "codex-local-mcp": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "examples",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test test/*.test.mjs",
+    "test:live": "npm run build && node test/live.mjs",
+    "prepack": "npm run build",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "dependencies": {
+    "@modelcontextprotocol/server": "2.4.0",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/client": "2.4.0",
+    "@types/node": "22.19.15",
+    "prettier": "3.9.10",
+    "typescript": "5.9.3"
+  }
+}
