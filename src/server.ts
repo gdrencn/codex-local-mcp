@@ -7,6 +7,7 @@ import {
   querySchema,
   cancelSchema,
   continueSchema,
+  serviceSchema,
 } from './contracts.js';
 import { VERSION } from './version.js';
 
@@ -18,6 +19,7 @@ function toolResult(handler: () => Promise<unknown>) {
     }))
     .catch((error: unknown) => {
       const detail = {
+        ...(error instanceof TaskError ? error.details : {}),
         code: error instanceof TaskError ? error.code : 'internal_error',
         message: error instanceof Error ? error.message : String(error),
       };
@@ -34,7 +36,7 @@ export function createServer(manager: TaskService): McpServer {
     { name: 'codex-local-mcp', version: VERSION },
     {
       instructions:
-        'Delegate independent bounded tasks with local_submit; clients share four worker slots by default. Poll local_task by task ID and cursor, cancel with local_cancel, and continue with local_continue. Disconnecting does not cancel a task. Workers execute tools on this computer. Use separate worktrees or disjoint write scopes for concurrent edits. Model-list reachability does not prove generation. Do not expose this scheduler to workers.',
+        'Check local_status: primary is tried before backup. If requires_user_input is true or service_unavailable occurs, ask the user for a working IP:port in this conversation; after their answer use local_set_service to verify and save it. Never replay a task that already ran tools. Clients share four worker slots. Submit independent tasks, poll local_task by cursor, cancel or continue explicitly. Disconnecting does not cancel work. Use separate worktrees for overlapping edits.',
     },
   );
   server.registerTool(
@@ -46,6 +48,15 @@ export function createServer(manager: TaskService): McpServer {
       annotations: { readOnlyHint: true },
     },
     () => toolResult(() => manager.status()),
+  );
+  server.registerTool(
+    'local_set_service',
+    {
+      description:
+        'After the user supplies a new service IP:port or URL, verify its primary endpoint and save it for all conversations and the shell launcher. Omitted backup preserves it; null clears it. Failed verification leaves configuration unchanged. Does not retry or replay existing tasks.',
+      inputSchema: serviceSchema,
+    },
+    (input) => toolResult(() => manager.setService(input)),
   );
   server.registerTool(
     'local_submit',

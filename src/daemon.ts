@@ -9,6 +9,7 @@ import {
   querySchema,
   statusSchema,
   submitSchema,
+  serviceSchema,
 } from './contracts.js';
 import { TaskError } from './domain.js';
 import { TaskManager } from './manager.js';
@@ -43,6 +44,8 @@ async function main(): Promise<void> {
       }
       case 'submit':
         return manager.submit(submitSchema.parse(params));
+      case 'set_service':
+        return manager.setService(serviceSchema.parse(params));
       case 'query': {
         const value = querySchema.parse(params);
         return manager.query(value.task_id, value.cursor, value.limit, value.wait_ms);
@@ -107,6 +110,7 @@ async function main(): Promise<void> {
             const detail = {
               code: error instanceof TaskError ? error.code : 'invalid_request',
               message: clip(error instanceof Error ? error.message : String(error)),
+              ...(error instanceof TaskError && error.details ? { details: error.details } : {}),
             };
             if (!socket.destroyed)
               socket.write(JSON.stringify({ id: request.id, error: detail }) + '\n');

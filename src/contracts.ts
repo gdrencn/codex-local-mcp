@@ -7,6 +7,12 @@ const timeout_ms = z.number().int().min(100).max(86400000).optional();
 const request_id = z.string().min(1).max(128).optional();
 
 export const statusSchema = z.object({}).strict();
+export const serviceSchema = z
+  .object({
+    primary: z.string().min(1).max(2048),
+    backup: z.string().min(1).max(2048).nullable().optional(),
+  })
+  .strict();
 export const submitSchema = z
   .object({
     prompt,

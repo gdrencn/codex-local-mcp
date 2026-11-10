@@ -27,11 +27,13 @@ export function checkService(baseUrl: string, timeoutMs: number): Promise<Reacha
       );
       response.on('end', () => {
         try {
-          const parsed = JSON.parse(body) as { data?: unknown[] };
+          const parsed = JSON.parse(body) as { data?: { id?: unknown }[] };
           if (
             response.statusCode !== 200 ||
             !Array.isArray(parsed.data) ||
-            parsed.data.length === 0
+            !parsed.data.some(
+              (model) => model && typeof model.id === 'string' && model.id.length > 0,
+            )
           )
             throw new Error(`No models available (HTTP ${response.statusCode})`);
           finish({ available: true, checked_at });

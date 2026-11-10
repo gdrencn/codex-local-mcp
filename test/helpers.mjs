@@ -14,6 +14,7 @@ export async function setup(t, overrides = {}) {
     ...loadConfig({}),
     binary: fixture,
     dataDir: join(root, 'data'),
+    endpointsFile: join(root, 'endpoints.json'),
     defaultTimeoutMs: 3000,
     graceMs: 60,
     ...overrides,

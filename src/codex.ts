@@ -28,10 +28,15 @@ export function workerArguments(task: Task, config: Config): string[] {
   return args;
 }
 
-export function workerEnvironment(): NodeJS.ProcessEnv {
+export function workerEnvironment(task?: Task): NodeJS.ProcessEnv {
   const env = { ...process.env };
   // Each process is a fresh worker, not an implicit continuation of its host.
   delete env.CODEX_THREAD_ID;
   delete env.CODEX_TURN_ID;
+  if (task?.service_url) {
+    env.CODEX_LOCAL_BASE_URL = task.service_url;
+    env.CODEX_LOCAL_BACKUP_BASE_URL = '';
+    env.CODEX_LOCAL_MCP_BACKUP_BASE_URL = '';
+  }
   return env;
 }

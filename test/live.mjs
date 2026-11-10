@@ -23,6 +23,7 @@ const transport = new StdioClientTransport({
   env: {
     ...process.env,
     CODEX_LOCAL_MCP_DATA_DIR: join(root, 'state'),
+    CODEX_LOCAL_MCP_ENDPOINTS_FILE: join(root, 'endpoints.json'),
     CODEX_LOCAL_MCP_TIMEOUT_MS: '180000',
   },
 });

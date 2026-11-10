@@ -12,9 +12,10 @@ import { stopBackend } from '../dist/backend-client.js';
 
 test('official SDK client initializes stdio, lists tools, runs jobs, and reads structured errors', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'codex-local-mcp-wire-'));
-  const health = http.createServer((_req, res) =>
-    res.end(JSON.stringify({ data: [{ id: 'fixture-model' }] })),
-  );
+  let healthy = true;
+  const health = http.createServer((_req, res) => {
+    res.end(JSON.stringify({ data: healthy ? [{ id: 'fixture-model' }] : [] }));
+  });
   await new Promise((resolve) => health.listen(0, '127.0.0.1', resolve));
   const transport = new StdioClientTransport({
     command: process.execPath,
@@ -25,6 +26,7 @@ test('official SDK client initializes stdio, lists tools, runs jobs, and reads s
       CODEX_LOCAL_MCP_BINARY: fixture,
       CODEX_LOCAL_MCP_BASE_URL: `http://127.0.0.1:${health.address().port}/v1`,
       CODEX_LOCAL_MCP_DATA_DIR: join(root, 'data'),
+      CODEX_LOCAL_MCP_ENDPOINTS_FILE: join(root, 'endpoints.json'),
       CODEX_LOCAL_MCP_GRACE_MS: '50',
     },
   });
@@ -42,6 +44,7 @@ test('official SDK client initializes stdio, lists tools, runs jobs, and reads s
   assert.deepEqual(tools.tools.map((tool) => tool.name).sort(), [
     'local_cancel',
     'local_continue',
+    'local_set_service',
     'local_status',
     'local_submit',
     'local_task',
@@ -74,5 +77,19 @@ test('official SDK client initializes stdio, lists tools, runs jobs, and reads s
   const missing = await call('local_task', { task_id: '00000000-0000-0000-0000-000000000000' });
   assert.equal(missing.isError, true);
   assert.equal(missing.structuredContent.error.code, 'task_not_found');
+  healthy = false;
+  const offline = await call('local_status');
+  assert.equal(offline.structuredContent.service.requires_user_input, true);
+  const rejected = await call('local_submit', { cwd: root, prompt: 'offline' });
+  assert.equal(rejected.isError, true);
+  assert.equal(rejected.structuredContent.error.requires_user_input, true);
+  assert.equal(rejected.structuredContent.error.recovery_tool, 'local_set_service');
+  healthy = true;
+  const updated = await call('local_set_service', {
+    primary: `127.0.0.1:${health.address().port}`,
+    backup: null,
+  });
+  assert.equal(updated.structuredContent.updated_live, true);
+  assert.equal((await call('local_status')).structuredContent.service.available, true);
   assert.equal(diagnostics, '');
 });

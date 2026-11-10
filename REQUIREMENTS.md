@@ -1,5 +1,16 @@
 # Requirements
 
+## v0.3 service-address failover and user recovery
+
+- Configure the user's chosen primary and backup endpoints in private local configuration only. Public code remains portable.
+- Check primary first and backup only if primary cannot return a valid nonempty model list within a bounded deadline. Pin each admitted worker to the selected endpoint, so model discovery and inference cannot select different servers.
+- Share an address file between MCP and the standalone shell launcher. Support environment overrides. Persist user-supplied replacement addresses independently of the shared backend's immutable startup configuration, so existing and new conversations do not need a backend restart after address updates.
+- When all configured endpoints fail, return `requires_user_input`, a clear user-facing request for a working IP and port, attempted endpoints, and a next-action hint. Instruct the calling agent to ask the user in the current conversation. Do not block a server thread waiting for user input.
+- Add `local_set_service` to verify a user-provided primary address before atomically persisting it. Accept IP:port or HTTP(S) base URLs; optional backup omission preserves the previous backup and explicit null clears it. Invalid or unreachable replacement primaries must not overwrite current configuration.
+- Never automatically replay an agent task that has already run tools, or retry an entire task against the backup after partial execution. Failover selects an endpoint before starting a task.
+- Preserve generic native CLI argument forwarding, offline help/version, four shared worker slots, task isolation, and prior tool behavior.
+- Verify ordered failover, all-down recovery metadata, validated live updates across clients, route pinning, and standalone launcher behavior. Update local configuration, documentation, tests, public repository, and CI.
+
 ## Follow-up stage: comprehensive verification and multi-conversation use
 
 The user authorizes comprehensive use/testing, code improvements, registration in local Codex, and instructions for other conversations. These requirements supersede the initial standalone-stdio lifecycle and registration exclusions below.

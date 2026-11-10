@@ -5,6 +5,8 @@ import { delimiter, isAbsolute, join, resolve } from 'node:path';
 export interface Config {
   binary: string;
   baseUrl: string;
+  backupUrl: string | null;
+  endpointsFile: string;
   dataDir: string;
   maxConcurrency: number;
   maxQueue: number;
@@ -46,10 +48,27 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     );
   }
   const mcpServerId = env.CODEX_LOCAL_MCP_SERVER_ID ?? 'codex_local';
+  const backupUrl = env.CODEX_LOCAL_MCP_BACKUP_BASE_URL?.replace(/\/+$/, '') || null;
+  if (backupUrl) {
+    const backup = new URL(backupUrl);
+    if (
+      !['http:', 'https:'].includes(backup.protocol) ||
+      backup.username ||
+      backup.password ||
+      backup.search ||
+      backup.hash
+    )
+      throw new Error('Invalid CODEX_LOCAL_MCP_BACKUP_BASE_URL');
+  }
   if (!/^[A-Za-z0-9_-]+$/.test(mcpServerId)) throw new Error('Invalid CODEX_LOCAL_MCP_SERVER_ID');
   return {
     binary: env.CODEX_LOCAL_MCP_BINARY ?? 'codex-local',
     baseUrl,
+    backupUrl,
+    endpointsFile: resolve(
+      env.CODEX_LOCAL_MCP_ENDPOINTS_FILE ??
+        join(env.XDG_CONFIG_HOME ?? join(homedir(), '.config'), 'codex-local', 'endpoints.json'),
+    ),
     dataDir: resolve(
       env.CODEX_LOCAL_MCP_DATA_DIR ??
         join(env.XDG_DATA_HOME ?? join(homedir(), '.local/share'), 'codex-local-mcp'),

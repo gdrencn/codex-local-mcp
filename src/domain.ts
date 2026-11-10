@@ -7,6 +7,7 @@ export class TaskError extends Error {
   constructor(
     public readonly code: string,
     message: string,
+    public readonly details?: Record<string, unknown>,
   ) {
     super(message);
     this.name = 'TaskError';
@@ -35,6 +36,7 @@ export interface Task {
   parent_task_id: string | null;
   resume_session_id: string | null;
   session_id: string | null;
+  service_url?: string | null;
   created_at: string;
   started_at: string | null;
   ended_at: string | null;
@@ -62,6 +64,13 @@ export interface Reachability {
   available: boolean;
   checked_at: string;
   error?: string;
+  active_base_url?: string | null;
+  using_backup?: boolean;
+  requires_user_input?: boolean;
+  user_prompt?: string;
+  next_action?: string;
+  recovery_tool?: string;
+  attempts?: { base_url: string; available: boolean; error?: string }[];
 }
 
 export function publicTask(task: Task) {

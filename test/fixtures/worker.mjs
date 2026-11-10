@@ -27,6 +27,8 @@ if (options.capture)
       prompt: text,
       cwd: process.cwd(),
       inherited_thread: process.env.CODEX_THREAD_ID ?? null,
+      service_url: process.env.CODEX_LOCAL_BASE_URL ?? null,
+      backup_url: process.env.CODEX_LOCAL_BACKUP_BASE_URL ?? null,
     }),
   );
 const send = (value) => console.log(JSON.stringify(value));

@@ -16,7 +16,7 @@ import {
   type Submission,
   type Task,
 } from './domain.js';
-import { checkService } from './health.js';
+import { EndpointRegistry, recoveryDetails, type EndpointUpdate } from './endpoints.js';
 import { clip, JsonLineDecoder, summarizeEvent } from './output.js';
 import { bootIdentity, processIdentity, signalTree, snapshotTree } from './processes.js';
 import { TaskStore } from './store.js';
@@ -46,12 +46,14 @@ export class TaskManager {
   private closing = false;
   private shutdownPromise: Promise<void> | undefined;
   private healthInFlight: Promise<Reachability> | undefined;
+  private healthRevision = '';
+  private readonly endpoints: EndpointRegistry;
 
   constructor(
     readonly config: Config,
-    private readonly health: () => Promise<Reachability> = () =>
-      checkService(config.baseUrl, config.healthTimeoutMs),
+    private readonly health?: () => Promise<Reachability>,
   ) {
+    this.endpoints = new EndpointRegistry(config);
     this.binary = resolveExecutable(config.binary);
     this.store = new TaskStore(config.dataDir, config.maxLogBytes);
     this.store.open();
@@ -111,6 +113,13 @@ export class TaskManager {
       binary: this.binary,
       codex_version: version,
       service,
+      endpoint_configuration: (() => {
+        try {
+          return this.endpoints.current();
+        } catch {
+          return null;
+        }
+      })(),
       max_concurrency: this.config.maxConcurrency,
       max_queue: this.config.maxQueue,
       counts,
@@ -129,10 +138,21 @@ export class TaskManager {
 
   private serviceHealth(): Promise<Reachability> {
     // Coalesce concurrent checks without retaining stale health after completion.
-    this.healthInFlight ??= this.health().finally(() => {
-      this.healthInFlight = undefined;
-    });
+    const revision = this.endpoints.revision();
+    if (!this.healthInFlight || revision !== this.healthRevision) {
+      this.healthRevision = revision;
+      const current = (this.health ? this.health() : this.endpoints.check()).finally(() => {
+        if (this.healthInFlight === current) this.healthInFlight = undefined;
+      });
+      this.healthInFlight = current;
+    }
     return this.healthInFlight;
+  }
+
+  async setService(input: EndpointUpdate) {
+    const result = await this.endpoints.set(input);
+    this.healthInFlight = undefined;
+    return { ...result, updated_live: true };
   }
 
   async submit(input: Submission) {
@@ -178,7 +198,11 @@ export class TaskManager {
     if (existing) return existing;
     const service = await this.serviceHealth();
     if (!service.available)
-      throw new TaskError('service_unavailable', service.error ?? 'LAN service is unavailable');
+      throw new TaskError(
+        'service_unavailable',
+        service.error ?? 'LAN service is unavailable',
+        recoveryDetails(service),
+      );
     if (this.closing) throw new TaskError('server_closing', 'Server is shutting down');
     const raced = duplicate();
     if (raced) return raced;
@@ -198,6 +222,7 @@ export class TaskManager {
       parent_task_id: parent?.id ?? null,
       resume_session_id: parent?.session_id ?? null,
       session_id: null,
+      service_url: service.active_base_url ?? this.config.baseUrl,
       created_at: new Date().toISOString(),
       started_at: null,
       ended_at: null,
@@ -349,7 +374,7 @@ export class TaskManager {
     task.started_at = new Date().toISOString();
     const child = spawn(this.binary, workerArguments(task, this.config), {
       cwd: task.cwd,
-      env: workerEnvironment(),
+      env: workerEnvironment(task),
       stdio: ['pipe', 'pipe', 'pipe'],
       detached: true,
       shell: false,

@@ -14,7 +14,7 @@ export interface BackendRequest {
 export interface BackendReply {
   id: string;
   result?: unknown;
-  error?: { code: string; message: string };
+  error?: { code: string; message: string; details?: Record<string, unknown> };
 }
 export const MAX_FRAME = 4 * 1024 * 1024;
 

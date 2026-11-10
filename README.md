@@ -12,10 +12,11 @@ The server manages tasks and processes. Codex manages the tool loop. Your model 
 - Atomic task metadata, bounded logs, idempotent submission, and recovery of stored results after restart.
 - Official MCP TypeScript SDK and strict TypeScript. Each conversation connects over stdio to one automatically managed local backend through a private Unix socket; no TCP listener is exposed.
 - Multiple conversations share the same task history and four-worker limit. Closing one conversation does not interrupt another conversation's work.
+- Ordered primary/backup discovery, worker route pinning, and verified address updates shared with the shell launcher without restarting the backend.
 
 ## Requirements and installation
 
-Linux, Node.js 22+, and a working `codex-local` executable in PATH are required. `codex-local` must accept native Codex arguments and connect to your model service using the Responses API. Tested with Codex CLI 0.167.0. The server uses the provider ID `lan_local` for worker stream timeout configuration.
+Linux, Node.js 22+, and a working `codex-local` executable in PATH are required. `codex-local` must accept native Codex arguments and honor `CODEX_LOCAL_BASE_URL` as its inference destination using the Responses API. Use the current bundled launcher or update an older hardcoded launcher before enabling failover. Tested with Codex CLI 0.167.0. The server uses the provider ID `lan_local` for worker stream timeout configuration.
 
 ```sh
 git clone https://github.com/gdrencn/codex-local-mcp.git
@@ -61,11 +62,42 @@ approval_mode = "approve"
 
 [mcp_servers.codex_local.tools.local_cancel]
 approval_mode = "approve"
+
+[mcp_servers.codex_local.tools.local_set_service]
+approval_mode = "approve"
 ```
 
 In the tested Codex version this permits the configured tools in noninteractive `never` approval mode. Worker sandbox selection still applies. Without these per-tool policies a headless call can return `MCP tool call requires approval, but approval policy is never`.
 
-For an existing launcher, `CODEX_LOCAL_MCP_BASE_URL` controls the server's health check and must match the launcher's inference destination. The bundled example uses `CODEX_LOCAL_BASE_URL`, falling back to `CODEX_LOCAL_MCP_BASE_URL`, so one configured endpoint can serve both purposes.
+The server passes the selected endpoint to each worker as `CODEX_LOCAL_BASE_URL` and explicitly disables further launcher failover for that task. The bundled example honors this pin, so discovery and inference use the same service.
+
+## Primary, backup, and address recovery
+
+Both the server and bundled launcher read `~/.config/codex-local/endpoints.json` (or `$XDG_CONFIG_HOME/codex-local/endpoints.json`):
+
+```json
+{
+  "primary": "http://primary.example:8080/v1",
+  "backup": "http://backup.example:8080/v1"
+}
+```
+
+Set `CODEX_LOCAL_MCP_ENDPOINTS_FILE` to change the shared file location. Without a saved file, `CODEX_LOCAL_MCP_BASE_URL` and optional `CODEX_LOCAL_MCP_BACKUP_BASE_URL` supply defaults. The standalone launcher additionally supports `CODEX_LOCAL_ENDPOINTS_FILE` for its file location and `CODEX_LOCAL_BASE_URL`/`CODEX_LOCAL_BACKUP_BASE_URL` as explicit address overrides. An explicit launcher primary bypasses the saved file. An empty explicit backup disables fallback.
+
+Before admitting a new task, check primary, then backup if necessary. Each probe has its own deadline. A successful nonempty model list establishes reachability, not generation readiness. The task records its selected `service_url` and keeps it throughout execution, including queue wait. There is no automatic task replay after a generation or tool failure.
+
+If all addresses fail, `local_status.service` reports `requires_user_input`, `user_prompt`, `attempts`, and `next_action`. New submissions return the same recovery fields inside their structured `error` with code `service_unavailable`. MCP instructions tell the main agent to ask the user in the current conversation for a working IP and port; the server does not open a separate dialog or wait for an answer. The calling agent is responsible for presenting that question.
+
+After the user replies, call:
+
+```json
+{
+  "primary": "127.0.0.1:8080",
+  "backup": null
+}
+```
+
+Pass this to `local_set_service`. It accepts IP:port or HTTP(S) URLs, adds `/v1` to a root address, verifies the new primary itself, then atomically saves the shared file. Omit `backup` to preserve the previous backup; pass null to clear it. Failed primary verification leaves saved configuration unchanged even when an old backup works. Existing and new clients observe successful updates without a backend restart. Existing tasks keep their pinned address and are never resubmitted by this tool.
 
 ## Use from another conversation
 
@@ -78,19 +110,22 @@ Execute this task using the codex_local MCP. Check local_status first. Submit
 independent subtasks concurrently, up to four workers, and use local_task to
 wait for and collect results. Use separate worktrees for overlapping edits.
 Review and summarize the final results yourself.
+If all configured services are unavailable, ask me for a working IP:port.
+After my reply, verify and save it with local_set_service, then continue.
 ```
 
 No per-conversation server startup command is needed. Clients with the same data directory and configuration automatically share a backend. Task IDs can be queried or continued from another conversation. A client configured differently must use a separate data directory or stop the old backend and reconnect; conflicting configurations never silently replace an existing scheduler.
 
 ## Tools
 
-| Tool             | Arguments                                                                          | Behavior                                                                                       |
-| ---------------- | ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| `local_status`   | none                                                                               | Executable/version, service reachability, concurrency limits, counts, recent task IDs.         |
-| `local_submit`   | `prompt`, absolute `cwd`; optional `sandbox`, `images`, `timeout_ms`, `request_id` | Start a task or queue it and immediately return its ID.                                        |
-| `local_task`     | `task_id`; optional `cursor`, `limit`, `wait_ms`                                   | State, bounded event page, final answer, usage, exit details, and pagination cursor.           |
-| `local_cancel`   | `task_id`                                                                          | Cancel a queued task or terminate one worker and its descendants; return after confirmed exit. |
-| `local_continue` | terminal `task_id`, `prompt`; optional `images`, `timeout_ms`, `request_id`        | New task using that task's explicit Codex session, directory, and sandbox.                     |
+| Tool                | Arguments                                                                          | Behavior                                                                                       |
+| ------------------- | ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `local_status`      | none                                                                               | Executable/version, service reachability, concurrency limits, counts, recent task IDs.         |
+| `local_set_service` | `primary`; optional `backup` (URL or null)                                         | Verify and save a user-provided service address for all clients; never replay tasks.           |
+| `local_submit`      | `prompt`, absolute `cwd`; optional `sandbox`, `images`, `timeout_ms`, `request_id` | Start a task or queue it and immediately return its ID.                                        |
+| `local_task`        | `task_id`; optional `cursor`, `limit`, `wait_ms`                                   | State, bounded event page, final answer, usage, exit details, and pagination cursor.           |
+| `local_cancel`      | `task_id`                                                                          | Cancel a queued task or terminate one worker and its descendants; return after confirmed exit. |
+| `local_continue`    | terminal `task_id`, `prompt`; optional `images`, `timeout_ms`, `request_id`        | New task using that task's explicit Codex session, directory, and sandbox.                     |
 
 Example submission:
 
@@ -112,21 +147,23 @@ Request IDs deduplicate identical submissions, including after restart. Reusing 
 
 ## Configuration
 
-| Environment variable                | Default                                                                      | Meaning                                                                        |
-| ----------------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
-| `CODEX_LOCAL_MCP_BINARY`            | `codex-local`                                                                | Worker executable name or path.                                                |
-| `CODEX_LOCAL_MCP_BASE_URL`          | `http://127.0.0.1:8080/v1`                                                   | Models-endpoint health check; match the launcher's destination.                |
-| `CODEX_LOCAL_MCP_DATA_DIR`          | `$XDG_DATA_HOME/codex-local-mcp`, otherwise `~/.local/share/codex-local-mcp` | Shared task state and logs; one backend per directory.                         |
-| `CODEX_LOCAL_MCP_MAX_CONCURRENCY`   | `4`                                                                          | Running workers, 1–64, excluding the supervisor.                               |
-| `CODEX_LOCAL_MCP_MAX_QUEUE`         | `16`                                                                         | Pending queue capacity, 0–10,000.                                              |
-| `CODEX_LOCAL_MCP_TIMEOUT_MS`        | `600000`                                                                     | Per-task execution deadline; queue wait is reported separately.                |
-| `CODEX_LOCAL_MCP_GRACE_MS`          | `2000`                                                                       | SIGTERM-to-SIGKILL grace period.                                               |
-| `CODEX_LOCAL_MCP_HEALTH_TIMEOUT_MS` | `3000`                                                                       | Total health request deadline.                                                 |
-| `CODEX_LOCAL_MCP_MAX_LOG_BYTES`     | `16777216`                                                                   | Cap for each task log file; truncation is reported.                            |
-| `CODEX_LOCAL_MCP_SERVER_ID`         | `codex_local`                                                                | MCP entry disabled in workers.                                                 |
-| `CODEX_LOCAL_MCP_BACKEND_IDLE_MS`   | `60000`                                                                      | Backend idle shutdown interval after all clients disconnect and all work ends. |
+| Environment variable                | Default                                                                                         | Meaning                                                                        |
+| ----------------------------------- | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `CODEX_LOCAL_MCP_BINARY`            | `codex-local`                                                                                   | Worker executable name or path.                                                |
+| `CODEX_LOCAL_MCP_BASE_URL`          | `http://127.0.0.1:8080/v1`                                                                      | Models-endpoint health check; match the launcher's destination.                |
+| `CODEX_LOCAL_MCP_BACKUP_BASE_URL`   | unset                                                                                           | Optional backup when no saved endpoint file exists.                            |
+| `CODEX_LOCAL_MCP_ENDPOINTS_FILE`    | `$XDG_CONFIG_HOME/codex-local/endpoints.json`, otherwise `~/.config/codex-local/endpoints.json` | Shared live endpoint configuration, written by `local_set_service`.            |
+| `CODEX_LOCAL_MCP_DATA_DIR`          | `$XDG_DATA_HOME/codex-local-mcp`, otherwise `~/.local/share/codex-local-mcp`                    | Shared task state and logs; one backend per directory.                         |
+| `CODEX_LOCAL_MCP_MAX_CONCURRENCY`   | `4`                                                                                             | Running workers, 1–64, excluding the supervisor.                               |
+| `CODEX_LOCAL_MCP_MAX_QUEUE`         | `16`                                                                                            | Pending queue capacity, 0–10,000.                                              |
+| `CODEX_LOCAL_MCP_TIMEOUT_MS`        | `600000`                                                                                        | Per-task execution deadline; queue wait is reported separately.                |
+| `CODEX_LOCAL_MCP_GRACE_MS`          | `2000`                                                                                          | SIGTERM-to-SIGKILL grace period.                                               |
+| `CODEX_LOCAL_MCP_HEALTH_TIMEOUT_MS` | `3000`                                                                                          | Deadline per endpoint; two failed probes can take twice this value.            |
+| `CODEX_LOCAL_MCP_MAX_LOG_BYTES`     | `16777216`                                                                                      | Cap for each task log file; truncation is reported.                            |
+| `CODEX_LOCAL_MCP_SERVER_ID`         | `codex_local`                                                                                   | MCP entry disabled in workers.                                                 |
+| `CODEX_LOCAL_MCP_BACKEND_IDLE_MS`   | `60000`                                                                                         | Backend idle shutdown interval after all clients disconnect and all work ends. |
 
-A reachable nonempty `/models` response establishes reachability. Generation or tool failures still become failed tasks. The health request directly connects without using environment HTTP proxies. No alternative inference provider is selected on failure.
+A reachable nonempty `/models` response establishes reachability. Generation or tool failures still become failed tasks. Health requests connect directly without environment HTTP proxies. Only the configured primary and backup are considered.
 
 ## Task lifecycle and storage
 
@@ -155,7 +192,7 @@ npm test
 npm audit
 ```
 
-Automated tests use a controlled worker and the official SDK client. They cover parallel starts, queueing, stream/argument boundaries, independent cancellation, detached descendants, timeouts, same-session continuation, recovery, bounded output, and protocol errors.
+Automated tests use a controlled worker and the official SDK client. They cover parallel starts, queueing, stream/argument boundaries, independent cancellation, detached descendants, timeouts, same-session continuation, recovery, bounded output, protocol errors, ordered failover, all-down guidance, cross-client live updates, and pinned worker routing. Shell launcher tests require jq and report skips if it is unavailable.
 
 Opt-in real-service test:
 
@@ -163,7 +200,7 @@ Opt-in real-service test:
 CODEX_LOCAL_MCP_BASE_URL=http://127.0.0.1:8080/v1 npm run test:live
 ```
 
-This exercises all five tools: parallel local file tasks, explicit session continuation, a temporary workspace edit, image input, independent cancellation, execution timeout, idempotency, and explicit errors. It creates temporary fixtures and uses persistent Codex sessions for continuation. It does not modify the main Codex configuration.
+This exercises the five task tools: parallel local file tasks, explicit session continuation, a temporary workspace edit, image input, independent cancellation, execution timeout, idempotency, and explicit errors. It creates temporary fixtures and uses persistent Codex sessions for continuation. The sixth tool, `local_set_service`, is tested using isolated configuration and loopback fixtures. Tests do not modify the main Codex configuration.
 
 After registering the MCP and its intended tool policies, this separate opt-in check uses your actual main Codex account to delegate a file-reading task through the registered MCP:
 
@@ -173,8 +210,16 @@ npm run test:native
 
 It verifies the native `local_status → local_submit → local_task` calls and an unpredictable worker result without reading the file directly from the main agent. See [IMPLEMENTED.md](IMPLEMENTED.md) for observed results and limits.
 
+To test the actual main agent asking for a service address and applying the user's answer:
+
+```sh
+npm run test:native:recovery
+```
+
+This uses an isolated loopback service, temporary endpoint/task files, and the registered tool policies. It verifies the main agent's user-facing question followed by `local_set_service → local_status`, without changing saved user addresses or running model inference.
+
 ## Structure and provenance
 
-`src/domain.ts` defines tasks; `config.ts` handles configuration; `health.ts` checks reachability; `store.ts` owns indexed event persistence; `manager.ts` schedules tasks; `codex.ts` owns CLI arguments; `output.ts` decodes bounded JSONL; `processes.ts` owns Linux cleanup. `contracts.ts` shares validation, `service.ts` defines the adapter boundary, `backend-client.ts` handles IPC and automatic startup, `backend-protocol.ts` identifies compatible backends, and `daemon.ts` hosts the shared scheduler. `server.ts` adapts MCP tools and `cli.ts` serves each conversation over stdio.
+`src/domain.ts` defines tasks; `config.ts` handles startup configuration; `endpoints.ts` owns live address configuration, ordered selection, and verified updates; `health.ts` checks reachability; `store.ts` owns indexed event persistence; `manager.ts` schedules tasks; `codex.ts` owns CLI arguments; `output.ts` decodes bounded JSONL; `processes.ts` owns Linux cleanup. `contracts.ts` shares validation, `service.ts` defines the adapter boundary, `backend-client.ts` handles IPC and automatic startup, `backend-protocol.ts` identifies compatible backends, and `daemon.ts` hosts the shared scheduler. `server.ts` adapts MCP tools and `cli.ts` serves each conversation over stdio.
 
 The implementation is original. We reviewed [denysvitali/codex-mcp](https://github.com/denysvitali/codex-mcp), particularly explicit JSONL completion/failure handling and process groups, and [ralphkrauss/agent-orchestrator](https://github.com/ralphkrauss/agent-orchestrator), particularly independent worker lifecycles, cancellation, and durable results. No application code from either project is included. Protocol support comes from the [official MCP TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk). Original code is MIT licensed.

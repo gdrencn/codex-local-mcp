@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { existsSync, readFileSync } from 'node:fs';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { Client } from '@modelcontextprotocol/client';
@@ -24,6 +24,7 @@ async function context(t, extra = {}) {
     CODEX_LOCAL_MCP_BINARY: fixture,
     CODEX_LOCAL_MCP_BASE_URL: `http://127.0.0.1:${health.address().port}/v1`,
     CODEX_LOCAL_MCP_DATA_DIR: join(root, 'data'),
+    CODEX_LOCAL_MCP_ENDPOINTS_FILE: join(root, 'endpoints.json'),
     CODEX_LOCAL_MCP_GRACE_MS: '50',
     ...extra,
   };
@@ -215,4 +216,60 @@ test('long polling stays responsive and offline service permits existing task ac
   await a.cancel(job.task.id);
   await poll;
   assert.equal((await a.query(job.task.id)).task.state, 'cancelled');
+});
+
+test('live address updates reach existing and new clients without restarting or replaying pinned tasks', async (t) => {
+  const { root, config, open } = await context(t, { CODEX_LOCAL_MCP_MAX_CONCURRENCY: '1' });
+  const [a, b] = await Promise.all([open(), open()]);
+  const pid = (await a.status()).backend.pid;
+  const held = await a.submit({ cwd: root, prompt: JSON.stringify({ hold: true }) });
+  const capture = join(root, 'queued-capture.json');
+  const oldInput = {
+    cwd: root,
+    prompt: JSON.stringify({ capture, answer: 'pinned' }),
+    request_id: 'pinned',
+  };
+  const queued = await a.submit(oldInput);
+  assert.equal(queued.task.state, 'queued');
+  const replacement = http.createServer((_request, response) =>
+    response.end(JSON.stringify({ data: [{ id: 'replacement' }] })),
+  );
+  await new Promise((resolve) => replacement.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise((resolve) => replacement.close(resolve)));
+  const primary = `http://127.0.0.1:${replacement.address().port}/v1`;
+  await a.setService({ primary, backup: null });
+  assert.equal((await b.status()).service.active_base_url, primary);
+  const c = await open();
+  assert.equal((await c.status()).backend.pid, pid);
+  assert.equal((await c.status()).service.active_base_url, primary);
+  assert.equal((await b.submit(oldInput)).task.id, queued.task.id);
+  await b.cancel(held.task.id);
+  await until(async () => (await b.query(queued.task.id)).task.state === 'succeeded');
+  assert.equal(JSON.parse(readFileSync(capture, 'utf8')).service_url, config.baseUrl);
+  const freshCapture = join(root, 'fresh-capture.json');
+  const fresh = await c.submit({ cwd: root, prompt: JSON.stringify({ capture: freshCapture }) });
+  await until(async () => (await c.query(fresh.task.id)).task.state === 'succeeded');
+  const seen = JSON.parse(readFileSync(freshCapture, 'utf8'));
+  assert.equal(seen.service_url, primary);
+  assert.equal(seen.backup_url, '');
+  assert.equal((await b.query(queued.task.id)).task.service_url, config.baseUrl);
+});
+
+test('a fallback admission pins the actual worker to the backup endpoint', async (t) => {
+  const { root, config, open, setHealthy } = await context(t);
+  const backup = http.createServer((_request, response) =>
+    response.end(JSON.stringify({ data: [{ id: 'backup' }] })),
+  );
+  await new Promise((resolve) => backup.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise((resolve) => backup.close(resolve)));
+  const url = `http://127.0.0.1:${backup.address().port}/v1`;
+  await writeFile(config.endpointsFile, JSON.stringify({ primary: config.baseUrl, backup: url }));
+  setHealthy(false);
+  const client = await open();
+  assert.equal((await client.status()).service.using_backup, true);
+  const capture = join(root, 'backup-capture.json');
+  const job = await client.submit({ cwd: root, prompt: JSON.stringify({ capture }) });
+  await until(async () => (await client.query(job.task.id)).task.state === 'succeeded');
+  assert.equal(job.task.service_url, url);
+  assert.equal(JSON.parse(readFileSync(capture, 'utf8')).service_url, url);
 });

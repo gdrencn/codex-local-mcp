@@ -11,6 +11,7 @@ import { JsonLineDecoder } from './output.js';
 import type { TaskService } from './service.js';
 import type { TaskManager } from './manager.js';
 import { bootIdentity, processIdentity } from './processes.js';
+import type { EndpointUpdate } from './endpoints.js';
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 type Pending = {
@@ -33,7 +34,10 @@ export class BackendClient implements TaskService {
           if (!pending) return;
           this.pending.delete(reply.id);
           clearTimeout(pending.timer);
-          if (reply.error) pending.reject(new TaskError(reply.error.code, reply.error.message));
+          if (reply.error)
+            pending.reject(
+              new TaskError(reply.error.code, reply.error.message, reply.error.details),
+            );
           else pending.resolve(reply.result);
         } catch {
           socket.destroy(new Error('Invalid backend response'));
@@ -99,6 +103,9 @@ export class BackendClient implements TaskService {
   status(): ReturnType<TaskManager['status']> {
     return this.call('status', {}) as ReturnType<TaskManager['status']>;
   }
+  setService(input: EndpointUpdate): ReturnType<TaskManager['setService']> {
+    return this.call('set_service', input) as ReturnType<TaskManager['setService']>;
+  }
   submit(input: Submission): ReturnType<TaskManager['submit']> {
     return this.call('submit', input) as ReturnType<TaskManager['submit']>;
   }
@@ -126,6 +133,8 @@ function backendEnvironment(config: Config): NodeJS.ProcessEnv {
     ...process.env,
     CODEX_LOCAL_MCP_BINARY: config.binary,
     CODEX_LOCAL_MCP_BASE_URL: config.baseUrl,
+    CODEX_LOCAL_MCP_BACKUP_BASE_URL: config.backupUrl ?? '',
+    CODEX_LOCAL_MCP_ENDPOINTS_FILE: config.endpointsFile,
     CODEX_LOCAL_MCP_DATA_DIR: config.dataDir,
     CODEX_LOCAL_MCP_MAX_CONCURRENCY: String(config.maxConcurrency),
     CODEX_LOCAL_MCP_MAX_QUEUE: String(config.maxQueue),
@@ -140,7 +149,7 @@ function backendEnvironment(config: Config): NodeJS.ProcessEnv {
 
 export async function connectBackend(input: Config): Promise<BackendClient> {
   const { config, socketPath, signature } = prepareBackend(input);
-  const timeout = Math.max(40000, config.graceMs + 10000);
+  const timeout = Math.max(40000, config.graceMs + 10000, config.healthTimeoutMs * 2 + 10000);
   let lastSpawn = 0;
   let startupError = '';
   const started = Date.now();

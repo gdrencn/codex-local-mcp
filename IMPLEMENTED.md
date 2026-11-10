@@ -1,6 +1,35 @@
 # Implementation record
 
-## Current version: v0.2.0 follow-up verification
+## Current version: v0.3.0 service addresses and recovery
+
+Verified on 2026-11-10. The v0.2 and initial records below remain as historical verification.
+
+### Implemented behavior
+
+- Added `endpoints.ts` as the independent owner of address normalization, saved configuration, ordered primary/backup probes, recovery guidance, and verified atomic updates. Startup configuration and IPC signatures contain the address-file location rather than its changing contents.
+- Added the sixth MCP tool, `local_set_service`. It verifies the supplied primary itself before persisting; an omitted backup preserves the previous backup, explicit null clears it, and duplicate addresses are collapsed. A failed primary check leaves the saved file unchanged. The error metadata survives both IPC and MCP adapters.
+- Both unavailable status and rejected new submissions provide `requires_user_input`, a user-facing IP/port request, attempted endpoints, and next-action/recovery-tool hints. MCP instructions direct the caller to ask the user in the current conversation. Presentation remains the calling agent's responsibility.
+- Each admitted task persists its selected `service_url`. Worker environment pins discovery and inference to that address and disables launcher fallback for that task. Queued tasks retain their admitted address; address updates never replay work. New clients and existing clients observe verified updates without backend restart.
+- Updated the portable POSIX launcher to share the endpoint file, honor explicit environment pinning, try primary before backup, and isolate cached models/catalogs by both endpoint and model. Native arguments, streams, working directory, exit status, process replacement, signals, and offline help/version behavior remain covered.
+- Extended the backend RPC timeout to accommodate two configured health deadlines. Model-list health now requires at least one nonempty string model ID.
+
+### Verification
+
+All 35 automated tests passed with zero skips. New coverage includes malformed/empty/error/timeout primary responses, backup selection, all-down guidance, IPv4/IPv6/default-port normalization, failed-update preservation, backup preservation/removal, invalid-file repair, official-SDK recovery calls, cross-client live updates without owner replacement, pinned queued tasks, actual fallback-worker routing, launcher fallback/model matching, literal argument/stream boundaries, and per-endpoint cache isolation. Strict TypeScript checking, build, shell syntax checks, and dependency audit passed; audit reported zero known vulnerabilities. The installed launcher also passed its seven offline behavior tests.
+
+The real-service test passed all seven groups: overlapping native file-tool tasks (126,377 ms and 123,932 ms), explicit session continuation, workspace edit, image input, independent cancellation, execution deadline, and idempotency/errors. The active primary was verified against the actual service. Ordered fallback was exercised with controlled loopback services without disrupting the user's LAN servers.
+
+`npm run test:native` passed through the persisted MCP registration: a fresh main Codex used `local_status`, `local_submit`, and `local_task`, then returned its worker's exact unpredictable file token without reading it directly.
+
+`npm run test:native:recovery` passed using isolated endpoint/task files and a loopback health fixture. The actual main Codex asked the user for a usable IP and port when the service had no models, without guessing or changing addresses. Given the subsequent authorized user answer, it successfully called `local_set_service` and `local_status`, and the saved file contained the verified address. This test performed no model inference and left the user's endpoint file unchanged.
+
+### Local installation
+
+Updated the installed shell launcher and created the private shared endpoint file with the user's chosen primary and backup. Changed only the registered MCP entry to point at that file and added a scoped approval policy for `local_set_service`. Semantic comparison confirmed other Codex preferences and the authentication-file hash were unchanged at configuration verification. Installation-specific addresses and paths remain outside this public repository.
+
+Existing MCP clients need to reconnect after this version upgrade to discover the sixth tool. Subsequent address updates through that tool take effect without backend restart. README documents this distinction, environment precedence, recovery fields, test commands, and reusable conversation instructions.
+
+## Previous version: v0.2.0 follow-up verification
 
 The follow-up implementation and local installation were verified on 2026-11-09 (local time). The initial v0.1 records below describe the earlier standalone implementation.
 
