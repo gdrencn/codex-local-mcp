@@ -29,7 +29,8 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test:native": "npm run build && node test/native-client.mjs",
-    "test:native:recovery": "npm run build && node test/native-recovery.mjs"
+    "test:native:recovery": "npm run build && node test/native-recovery.mjs",
+    "test:native:reasoning": "npm run build && node test/native-reasoning.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/server": "2.4.0",

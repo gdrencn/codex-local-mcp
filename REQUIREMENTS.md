@@ -1,5 +1,13 @@
 # Requirements
 
+## Shared extra-high reasoning default
+
+- Use `xhigh` as the shared default for standalone `codex-local` and MCP workers. The launcher reads the default from its model catalog template; MCP inherits that launcher setting without a separate reasoning default or new CLI options.
+- Advertise `xhigh` in the catalog so native Codex can recognize and display the configured effort. Preserve native explicit configuration overrides.
+- Invalidate generated catalog caches when the template changes, including existing caches that advertised no reasoning levels. Keep model-ID and endpoint isolation and atomic catalog writes.
+- Verify both entry points using actual native Codex requests: the outbound Responses payload must contain `reasoning.effort` equal to `xhigh`, without requiring reasoning summaries. Confirm the real LAN service accepts a short request. Do not claim this measures the backend's internal reasoning budget.
+- Preserve service addresses, model discovery, MCP scheduling, main-account settings, and unrelated in-progress changes. Update project documentation and the public GitHub repository.
+
 ## v0.3 service-address failover and user recovery
 
 - Configure the user's chosen primary and backup endpoints in private local configuration only. Public code remains portable.

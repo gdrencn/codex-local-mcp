@@ -1,5 +1,19 @@
 # Implementation record
 
+## Latest update: shared `xhigh` reasoning default
+
+Verified on 2026-11-10 with native Codex CLI 0.167.0. Standalone `codex-local` and MCP workers now share `xhigh` through the launcher's model catalog template. The template supplies both the default effort and a selectable `xhigh` entry; the launcher reads the default instead of maintaining a second hardcoded value, and MCP adds no independent reasoning override. Reasoning summaries default to `none`, preserving support for services that do not provide summaries. Explicit native CLI overrides continue to pass through.
+
+Generated catalog filenames now include the template-content hash as well as the model ID within the endpoint-specific cache directory. A template upgrade therefore replaces stale reasoning metadata on the next launch without rewriting catalogs already referenced by running processes. Offline cached-model selection and concurrent model isolation are preserved.
+
+All 36 automated tests passed with zero skips. The added cache-upgrade regression starts with a cached template advertising `low` and no selectable levels, upgrades the template while discovery is unavailable, and verifies that the same model receives a new catalog and matching `xhigh` configuration while the previous catalog stays unchanged. Strict TypeScript and installed shell syntax checks passed. The installed launcher's seven behavioral checks also passed.
+
+`npm run test:native:reasoning` passed with the bundled example and with the installed launcher selected through `CODEX_LOCAL_TEST_BINARY`. Both runs used actual native Codex processes, an isolated Codex home, temporary task/cache files, and a loopback Responses fixture. Captured standalone and MCP-worker HTTP requests contained `reasoning.effort: "xhigh"` without requesting reasoning summaries; both tasks completed successfully. This verifies configuration propagation through native Codex rather than inferring it from shell argument text.
+
+After deployment, the already-connected user MCP successfully created a new read-only worker against the configured LAN primary. The worker returned exactly `XHIGH_READY`, completed with exit zero in 5,942 ms, and emitted `turn.completed`. This confirms service acceptance of the new default; it does not measure a particular backend internal reasoning budget. Main Codex configuration, authentication, and shared endpoint-file hashes remained unchanged. Unrelated in-progress permission changes were kept outside this update.
+
+The installed launcher and its metadata template were updated together. New standalone processes and newly launched MCP workers use `xhigh` without a backend restart. Already-running Codex processes retain their loaded settings and need a new process/session to use the changed default.
+
 ## Current version: v0.3.0 service addresses and recovery
 
 Verified on 2026-11-10. The v0.2 and initial records below remain as historical verification.

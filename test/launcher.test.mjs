@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -9,6 +9,10 @@ const hasJq = spawnSync('jq', ['--version']).status === 0;
 async function context(t) {
   const root = await mkdtemp(join(tmpdir(), 'codex-local-launcher-'));
   t.after(() => rm(root, { recursive: true, force: true }));
+  const launcher = join(root, 'codex-local.sh');
+  const modelTemplate = join(root, 'models.json');
+  await copyFile(resolve('examples/codex-local.sh'), launcher);
+  await copyFile(resolve('examples/models.json'), modelTemplate);
   await writeFile(
     join(root, 'codex'),
     `#!/usr/bin/env node
@@ -52,7 +56,7 @@ console.log(typeof response === 'string' ? response : JSON.stringify(response));
   delete env.CODEX_LOCAL_ENDPOINTS_FILE;
   const run = (args = [], input = '', overrides = {}) =>
     new Promise((resolveRun, reject) => {
-      const child = spawn(resolve('examples/codex-local.sh'), args, {
+      const child = spawn(launcher, args, {
         cwd: root,
         env: { ...env, ...overrides },
         stdio: ['pipe', 'pipe', 'pipe'],
@@ -80,6 +84,7 @@ console.log(typeof response === 'string' ? response : JSON.stringify(response));
             stderr,
             model: value('model'),
             catalog: value('model_catalog_json'),
+            effort: value('model_reasoning_effort'),
             provider: configs.find((text) => text.startsWith('model_providers.')),
             launcher_pid: child.pid,
           });
@@ -97,7 +102,7 @@ console.log(typeof response === 'string' ? response : JSON.stringify(response));
       throw error;
     }
   };
-  return { root, file, primary, backup, routes, run, probes };
+  return { root, file, primary, backup, routes, run, probes, modelTemplate };
 }
 
 test(
@@ -177,5 +182,35 @@ test(
     const offline = await run(['exec', 'hello'], '', { PROBE_ROUTES: '{}' });
     assert.equal(offline.model, original.model);
     assert.equal(offline.catalog, original.catalog);
+  },
+);
+
+test(
+  'template upgrades refresh cached capabilities and the shared reasoning default even while offline',
+  { skip: !hasJq },
+  async (t) => {
+    const { modelTemplate, run } = await context(t);
+    const current = await readFile(modelTemplate, 'utf8');
+    const legacy = JSON.parse(current);
+    legacy.models[0].default_reasoning_level = 'low';
+    legacy.models[0].supported_reasoning_levels = [];
+    await writeFile(modelTemplate, JSON.stringify(legacy));
+    const before = await run(['exec', 'hello']);
+    assert.equal(before.effort, 'low');
+    await writeFile(modelTemplate, current);
+    const after = await run(['exec', 'hello'], '', { PROBE_ROUTES: '{}' });
+    assert.equal(after.model, before.model);
+    assert.equal(after.effort, 'xhigh');
+    assert.notEqual(after.catalog, before.catalog);
+    const model = JSON.parse(await readFile(after.catalog, 'utf8')).models[0];
+    assert.equal(model.default_reasoning_level, after.effort);
+    assert.deepEqual(
+      model.supported_reasoning_levels.map((level) => level.effort),
+      ['xhigh'],
+    );
+    assert.equal(
+      JSON.parse(await readFile(before.catalog, 'utf8')).models[0].default_reasoning_level,
+      'low',
+    );
   },
 );

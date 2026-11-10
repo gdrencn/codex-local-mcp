@@ -67,11 +67,14 @@ if [ "$codex_local_found" = no ] && [ -r "$codex_local_cache/last-model" ]; then
     IFS= read -r codex_local_model < "$codex_local_cache/last-model" || :
 fi
 
-# A per-ID catalog prevents two concurrent launches from replacing each other's
-# metadata while a different backend is being loaded at the shared endpoint.
+# Include the template revision so upgrades cannot retain stale capabilities.
+# Per-model files prevent concurrent launches from replacing each other's metadata.
+codex_local_digest=$(sha256sum "$codex_local_catalog")
+codex_local_template_key=${codex_local_digest%% *}
+codex_local_effort=$(jq -er '.models[0].default_reasoning_level | select(type == "string" and length > 0)' "$codex_local_catalog")
 codex_local_digest=$(printf '%s' "$codex_local_model" | sha256sum)
 codex_local_key=${codex_local_digest%% *}
-codex_local_cached_catalog=$codex_local_cache/models-$codex_local_key.json
+codex_local_cached_catalog=$codex_local_cache/models-$codex_local_key-$codex_local_template_key.json
 if [ ! -r "$codex_local_cached_catalog" ]; then
     mkdir -p -- "$codex_local_cache"
     codex_local_tmp=$(mktemp "$codex_local_cache/.catalog-XXXXXX")
@@ -88,6 +91,7 @@ fi
 codex_local_model_toml=$(jq -nr --arg model "$codex_local_model" '$model | tojson')
 codex_local_catalog_toml=$(jq -nr --arg path "$codex_local_catalog" '$path | tojson')
 codex_local_url_toml=$(jq -nr --arg url "$codex_local_base_url" '$url | tojson')
+codex_local_effort_toml=$(jq -nr --arg effort "$codex_local_effort" '$effort | tojson')
 codex_local_authority=${codex_local_base_url#*://}
 codex_local_authority=${codex_local_authority%%/*}
 case "$codex_local_authority" in
@@ -104,7 +108,8 @@ exec codex \
     -c 'model_provider="lan_local"' \
     -c "model=$codex_local_model_toml" \
     -c "model_catalog_json=$codex_local_catalog_toml" \
-    -c 'model_reasoning_effort="low"' \
+    -c "model_reasoning_effort=$codex_local_effort_toml" \
+    -c 'model_reasoning_summary="none"' \
     -c 'web_search="disabled"' \
     -c "model_providers.lan_local={name=\"LAN local model\",base_url=$codex_local_url_toml,wire_api=\"responses\",requires_openai_auth=false,request_max_retries=0,stream_max_retries=0,stream_idle_timeout_ms=60000}" \
     "$@"

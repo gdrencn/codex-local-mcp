@@ -71,6 +71,14 @@ In the tested Codex version this permits the configured tools in noninteractive 
 
 The server passes the selected endpoint to each worker as `CODEX_LOCAL_BASE_URL` and explicitly disables further launcher failover for that task. The bundled example honors this pin, so discovery and inference use the same service.
 
+## Reasoning effort
+
+Standalone `codex-local` and MCP workers share the `xhigh` default. The launcher reads `default_reasoning_level` from its model catalog template, which advertises `xhigh` as a selectable effort. MCP inherits that launcher setting and has no separate reasoning default. The bundled template is `examples/models.json`; an installed launcher keeps the equivalent template beside its source or in its own configuration directory.
+
+Generated catalog filenames include a template-content hash as well as the model ID. A template update therefore refreshes reasoning metadata on the next launch even if an older catalog is already cached or the service is offline. Existing processes keep their loaded settings. Native explicit `-c` overrides still pass through after launcher defaults. The launcher defaults reasoning summaries to `none`, so a local service does not need to provide summaries to accept the effort setting.
+
+The native request check verifies both entry points actually send `reasoning.effort: "xhigh"`. Service acceptance does not measure or guarantee a particular internal reasoning-token budget. The [official OpenAI configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference) documents reasoning effort and summary as separate settings.
+
 ## Primary, backup, and address recovery
 
 Both the server and bundled launcher read `~/.config/codex-local/endpoints.json` (or `$XDG_CONFIG_HOME/codex-local/endpoints.json`):
@@ -217,6 +225,14 @@ npm run test:native:recovery
 ```
 
 This uses an isolated loopback service, temporary endpoint/task files, and the registered tool policies. It verifies the main agent's user-facing question followed by `local_set_service → local_status`, without changing saved user addresses or running model inference.
+
+To verify the actual native Codex request parameters from both entry points:
+
+```sh
+npm run test:native:reasoning
+```
+
+This check needs an installed Codex CLI and jq. It uses an isolated Codex home, temporary caches and task state, and a loopback Responses fixture. It captures the standalone and MCP-worker HTTP payloads and checks that both request `xhigh` without requiring summaries. Set `CODEX_LOCAL_TEST_BINARY` to test another installed launcher instead of the bundled example.
 
 ## Structure and provenance
 
