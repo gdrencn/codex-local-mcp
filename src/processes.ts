@@ -1,8 +1,17 @@
 import { readdirSync, readFileSync } from 'node:fs';
 
-interface ProcessIdentity {
+export interface ProcessIdentity {
   pid: number;
   start: string;
+}
+
+export function bootIdentity(): string {
+  return readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim();
+}
+
+export function processIdentity(pid: number): ProcessIdentity | undefined {
+  const info = inspect(pid);
+  return info && info.state !== 'Z' ? { pid, start: info.start } : undefined;
 }
 
 function inspect(pid: number): { parent: number; start: string; state: string } | undefined {
@@ -22,14 +31,19 @@ export function snapshotTree(root: number): ProcessIdentity[] {
     .map(Number)
     .map((pid) => ({ pid, info: inspect(pid) }))
     .filter((entry) => entry.info !== undefined);
+  const children = new Map<number, number[]>();
+  for (const entry of processes) {
+    const siblings = children.get(entry.info!.parent) ?? [];
+    siblings.push(entry.pid);
+    children.set(entry.info!.parent, siblings);
+  }
   const selected = new Set([root]);
-  let changed = true;
-  while (changed) {
-    changed = false;
-    for (const entry of processes) {
-      if (!selected.has(entry.pid) && selected.has(entry.info!.parent)) {
-        selected.add(entry.pid);
-        changed = true;
+  const queue = [root];
+  for (let index = 0; index < queue.length; index++) {
+    for (const pid of children.get(queue[index]!) ?? []) {
+      if (!selected.has(pid)) {
+        selected.add(pid);
+        queue.push(pid);
       }
     }
   }

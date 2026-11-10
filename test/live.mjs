@@ -6,6 +6,8 @@ import { join, resolve } from 'node:path';
 import { deflateSync } from 'node:zlib';
 import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
+import { loadConfig } from '../dist/config.js';
+import { stopBackend } from '../dist/backend-client.js';
 
 // This check deliberately requires an explicitly configured service endpoint.
 if (!process.env.CODEX_LOCAL_MCP_BASE_URL)
@@ -160,6 +162,62 @@ try {
   for (const word of ['red', 'square', 'blue', 'circle'])
     assert.ok(answer.includes(word), viewed.final_message);
   console.log(JSON.stringify({ phase: 'image_passed', answer: viewed.final_message }));
+
+  const sleeper = await call('local_submit', {
+    cwd: root,
+    prompt: 'Use the local shell tool to run sleep 30. After it finishes, reply SLEEP_DONE.',
+  });
+  let cursor = 0,
+    sawSleep = false;
+  const untilSleep = Date.now() + 120000;
+  while (Date.now() < untilSleep && !sawSleep) {
+    const page = await call('local_task', { task_id: sleeper.task.id, cursor, wait_ms: 1000 });
+    cursor = page.next_cursor;
+    sawSleep = page.events.some((event) => /sleep 30/.test(event.detail?.item?.command ?? ''));
+    assert.ok(['queued', 'running'].includes(page.task.state), JSON.stringify(page.task));
+  }
+  assert.ok(sawSleep, 'Worker did not start the expected local sleep command');
+  const survivor = await call('local_submit', {
+    cwd: root,
+    prompt: 'Do not use tools. Reply exactly SURVIVOR_OK.',
+  });
+  const cancelled = await call('local_cancel', { task_id: sleeper.task.id });
+  assert.equal(cancelled.task.state, 'cancelled');
+  assert.equal((await wait(survivor.task.id)).final_message.trim(), 'SURVIVOR_OK');
+  console.log(JSON.stringify({ phase: 'independent_cancellation_passed' }));
+
+  const deadlineTask = await call('local_submit', {
+    cwd: root,
+    timeout_ms: 1500,
+    prompt: 'Use the local shell tool to run sleep 30. After it finishes, reply SLEEP_DONE.',
+  });
+  let timed;
+  const untilTimeout = Date.now() + 30000;
+  while (Date.now() < untilTimeout) {
+    timed = await call('local_task', { task_id: deadlineTask.task.id, wait_ms: 1000 });
+    if (!['queued', 'running'].includes(timed.task.state)) break;
+  }
+  assert.equal(timed.task.state, 'timed_out');
+  console.log(JSON.stringify({ phase: 'execution_timeout_passed' }));
+
+  const duplicateInput = {
+    cwd: root,
+    prompt: 'Do not use tools. Reply exactly DEDUPE_OK.',
+    request_id: 'live-idempotency',
+  };
+  const [one, two] = await Promise.all([
+    call('local_submit', duplicateInput),
+    call('local_submit', duplicateInput),
+  ]);
+  assert.equal(one.task.id, two.task.id);
+  assert.equal((await wait(one.task.id)).final_message.trim(), 'DEDUPE_OK');
+  const missing = await client.callTool({
+    name: 'local_task',
+    arguments: { task_id: '00000000-0000-0000-0000-000000000000' },
+  });
+  assert.equal(missing.isError, true);
+  assert.equal(missing.structuredContent.error.code, 'task_not_found');
+  console.log(JSON.stringify({ phase: 'idempotency_and_errors_passed' }));
   console.log(
     JSON.stringify({
       passed: true,
@@ -168,10 +226,14 @@ try {
         'explicit_session_continuation',
         'workspace_edit',
         'image_input',
+        'independent_cancellation',
+        'execution_timeout',
+        'idempotency_and_errors',
       ],
     }),
   );
 } finally {
   await client.close();
+  await stopBackend(loadConfig({ ...process.env, CODEX_LOCAL_MCP_DATA_DIR: join(root, 'state') }));
   await rm(root, { recursive: true, force: true });
 }

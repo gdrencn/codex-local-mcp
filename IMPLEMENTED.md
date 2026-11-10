@@ -1,5 +1,37 @@
 # Implementation record
 
+## Current version: v0.2.0 follow-up verification
+
+The follow-up implementation and local installation were verified on 2026-11-09 (local time). The initial v0.1 records below describe the earlier standalone implementation.
+
+### Fixed and optimized
+
+- Replaced per-conversation scheduler ownership with a private Unix-socket backend and thin stdio clients. Independent conversations now share tasks and the four-worker limit instead of failing on the same data-directory lock.
+- Added automatic backend startup, strict configuration/version matching, configurable idle shutdown, and explicit `--stop-backend`. Disconnecting one conversation does not cancel shared work.
+- Fixed a startup race when reconnecting immediately after a killed backend. Stale lock detection now checks Linux boot identity and process start ticks, rather than only a potentially reused PID.
+- Added recorded-worker identity checks and orphan cleanup during crash recovery. Work is marked interrupted and is not replayed.
+- Fixed query cursor advancement during concurrent event arrival, preventing skipped events. Event pagination uses byte-offset indexing and binary search, with UTF-8 boundaries and recovery covered by tests.
+- Coalesced simultaneous service health checks without caching completed results; counted task states in one pass and changed descendant traversal to linear-time breadth-first scanning.
+- Shared validation contracts between IPC and MCP and introduced a typed task-service boundary, keeping the scheduler independent of protocol adapters.
+
+### Automated verification
+
+All 24 tests passed, including two simultaneous official-SDK MCP clients sharing four slots, queueing a fifth task, isolated cancellation, client disconnect/reconnect, cross-client session continuation, backend configuration conflict, hard crash with orphan cleanup, graceful restart, idle restart, long polling, offline-service behavior, request deduplication, query-race regression, indexed UTF-8 pages, process cleanup, timeout, malformed/large output, and terminal failure handling. TypeScript compilation and dependency audit passed; no known dependency vulnerabilities were reported.
+
+### Real-service and native-client verification
+
+The expanded `test/live.mjs` passed all seven groups through actual MCP calls: parallel local file tools (16,771 ms and 17,854 ms), explicit session continuation, workspace editing, image input, independent cancellation while another worker completed, execution timeout, and idempotency/error responses. This exercises all five tools.
+
+`npm run test:native` also passed: a fresh main Codex process used the registered `local_status → local_submit → local_task` tools and returned the exact unpredictable file token read by its local worker. The main agent did not use a shell/file-reading tool to obtain that token. This final check used the persisted user configuration without a temporary approval override.
+
+### Local registration and other conversations
+
+The user-level `codex_local` stdio entry is configured for the local checkout and the user's existing launcher/service. Only this MCP entry and its three task-changing tool approval policies were added. Semantic comparison confirmed that pre-existing model/account preferences were preserved. Installation-specific paths and endpoint values remain in local user configuration, not this public repository.
+
+Native Codex initially allowed status inspection but rejected submission in `never` approval mode. Scoped `approval_mode = "approve"` policies for this trusted local server's `local_submit`, `local_continue`, and `local_cancel` were then verified; global approval policy was not changed.
+
+New local Codex conversations can use the registered entry after client startup/restart. README includes the user configuration, per-tool policies, a delegation prompt, update instructions, and the distinction from ChatGPT web. The runtime backend is automatic; no manual per-conversation process startup is needed.
+
 ## Phase 1: core and protocol verified
 
 Implemented in separate modules: domain types, environment configuration, service health, persistence, scheduling, Codex argument generation, JSONL decoding, Linux process cleanup, MCP tool registration, and the stdio entry point.
@@ -24,12 +56,12 @@ The live run discovered that native Codex validates transport even for disabled 
 
 ## Limits
 
-The process supervisor targets Linux. Jobs do not promise survival after a killed server, and unfinished tasks are interrupted on recovery without replay. Logs are bounded per file; historical task count and total disk usage are not automatically capped. Cancellation is process lifecycle management, with Codex responsible for its sandbox. The current service passed the listed tests; these results do not certify every backend or external integration. Workers disable Apps/plugins and their scheduling MCP.
+The process supervisor targets Linux. Backend crashes interrupt work; recorded surviving workers are cleaned up only with matching boot/start identities, and unrecorded descendants cannot be guaranteed recoverable. Client disconnects preserve tasks in v0.2. Unfinished tasks are interrupted on backend recovery without replay. Logs are bounded per file; historical task count and total disk usage are not automatically capped. Cancellation is process lifecycle management, with Codex responsible for its sandbox. The current service passed the listed tests; these results do not certify every backend or external integration. Workers disable Apps/plugins and their scheduling MCP.
 
 ## Publication
 
 Public repository: [gdrencn/codex-local-mcp](https://github.com/gdrencn/codex-local-mcp).
 
-Publication includes the modular source, 14 automated tests, opt-in real-service test, README, MIT license, pinned dependency lockfile, portable launcher example, and a GitHub Actions workflow with pinned action revisions. Staged-source review found no machine-specific paths, installation-specific LAN address, credentials, task logs, or dependency directories. The package dry run contained the built modules, public documentation, license, and launcher example.
+Publication includes modular source, automated tests, opt-in real-service and native-client checks, README, MIT license, pinned dependency lockfile, portable launcher example, and a GitHub Actions workflow with pinned action revisions. Source review excludes machine-specific paths, installation-specific LAN address, credentials, task logs, and dependency directories. The package dry run contained the built modules, public documentation, license, and launcher example.
 
-Main Codex connection registration and npm registry publication are outside this stage. Follow the README to connect the checked-out build; the implementation does not edit account or connection configuration automatically.
+The initial release did not register the MCP automatically. The authorized follow-up registered it locally as described above; the server itself does not rewrite account or connection configuration. npm registry publication has not been performed.

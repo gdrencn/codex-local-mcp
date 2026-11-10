@@ -18,7 +18,7 @@ import {
 } from './domain.js';
 import { checkService } from './health.js';
 import { clip, JsonLineDecoder, summarizeEvent } from './output.js';
-import { signalTree, snapshotTree } from './processes.js';
+import { bootIdentity, processIdentity, signalTree, snapshotTree } from './processes.js';
 import { TaskStore } from './store.js';
 
 type StopState = 'cancelled' | 'timed_out' | 'interrupted';
@@ -45,6 +45,7 @@ export class TaskManager {
   private readonly version: Promise<string>;
   private closing = false;
   private shutdownPromise: Promise<void> | undefined;
+  private healthInFlight: Promise<Reachability> | undefined;
 
   constructor(
     readonly config: Config,
@@ -59,8 +60,20 @@ export class TaskManager {
         this.tasks.set(task.id, task);
         if (task.request_id) this.requests.set(task.request_id, task.id);
         if (!isTerminal(task.state)) {
+          // A killed backend may leave its worker running. Only clean it up
+          // when boot identity and process start ticks prove it is our worker.
+          if (
+            task.pid &&
+            task.pid_boot === bootIdentity() &&
+            task.pid_start &&
+            processIdentity(task.pid)?.start === task.pid_start
+          ) {
+            signalTree(task.pid, 'SIGKILL');
+          }
           task.state = 'interrupted';
           task.pid = null;
+          task.pid_start = null;
+          task.pid_boot = null;
           task.ended_at = new Date().toISOString();
           task.error = {
             code: 'server_restarted',
@@ -83,12 +96,17 @@ export class TaskManager {
   }
 
   async status() {
-    const [service, version] = await Promise.all([this.health(), this.version]);
-    const counts = Object.fromEntries(
-      ['queued', 'running', 'succeeded', 'failed', 'cancelled', 'timed_out', 'interrupted'].map(
-        (state) => [state, [...this.tasks.values()].filter((task) => task.state === state).length],
-      ),
-    );
+    const [service, version] = await Promise.all([this.serviceHealth(), this.version]);
+    const counts = {
+      queued: 0,
+      running: 0,
+      succeeded: 0,
+      failed: 0,
+      cancelled: 0,
+      timed_out: 0,
+      interrupted: 0,
+    };
+    for (const task of this.tasks.values()) counts[task.state]++;
     return {
       binary: this.binary,
       codex_version: version,
@@ -101,6 +119,20 @@ export class TaskManager {
         .slice(0, 20)
         .map((task) => ({ task_id: task.id, state: task.state, created_at: task.created_at })),
     };
+  }
+
+  hasWork(): boolean {
+    return (
+      this.running.size > 0 || [...this.tasks.values()].some((task) => task.state === 'queued')
+    );
+  }
+
+  private serviceHealth(): Promise<Reachability> {
+    // Coalesce concurrent checks without retaining stale health after completion.
+    this.healthInFlight ??= this.health().finally(() => {
+      this.healthInFlight = undefined;
+    });
+    return this.healthInFlight;
   }
 
   async submit(input: Submission) {
@@ -144,7 +176,7 @@ export class TaskManager {
     };
     const existing = duplicate();
     if (existing) return existing;
-    const service = await this.health();
+    const service = await this.serviceHealth();
     if (!service.available)
       throw new TaskError('service_unavailable', service.error ?? 'LAN service is unavailable');
     if (this.closing) throw new TaskError('server_closing', 'Server is shutting down');
@@ -262,10 +294,18 @@ export class TaskManager {
         this.changes.once(id, done);
       });
     }
-    const events = await this.store.events(id, cursor, limit);
+    // Freeze the cursor ceiling before disk I/O so newly arriving events are
+    // returned on the next poll rather than skipped after this read reaches EOF.
+    const snapshot = { ...task };
+    const events = await this.store.events(id, cursor, limit, snapshot.event_count);
     const next =
-      events.length === limit ? events.at(-1)!.cursor : Math.max(cursor, task.event_count);
-    return { task: publicTask(task), events, next_cursor: next, has_more: next < task.event_count };
+      events.length === limit ? events.at(-1)!.cursor : Math.max(cursor, snapshot.event_count);
+    return {
+      task: publicTask(snapshot),
+      events,
+      next_cursor: next,
+      has_more: next < snapshot.event_count,
+    };
   }
 
   async cancel(id: string) {
@@ -315,6 +355,8 @@ export class TaskManager {
       shell: false,
     });
     task.pid = child.pid ?? null;
+    task.pid_start = task.pid ? (processIdentity(task.pid)?.start ?? null) : null;
+    task.pid_boot = task.pid ? bootIdentity() : null;
     let resolveClosed!: () => void;
     const closed = new Promise<void>((resolve) => {
       resolveClosed = resolve;
@@ -438,6 +480,8 @@ export class TaskManager {
     task.exit_code = code;
     task.exit_signal = signal;
     task.pid = null;
+    task.pid_start = null;
+    task.pid_boot = null;
     task.ended_at = new Date().toISOString();
     task.state =
       running.stop ?? (code === 0 && running.completed && !running.failed ? 'succeeded' : 'failed');

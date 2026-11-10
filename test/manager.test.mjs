@@ -6,6 +6,59 @@ import { join } from 'node:path';
 import { setup, until, completed, available } from './helpers.mjs';
 import { TaskManager } from '../dist/manager.js';
 
+test('concurrent health checks coalesce without caching completed results', async (t) => {
+  const { root, manager } = await setup(t);
+  let count = 0;
+  const releases = [];
+  manager.health = () => {
+    count++;
+    return new Promise((resolve) =>
+      releases.push(() => resolve({ available: true, checked_at: '' })),
+    );
+  };
+  const requests = [
+    manager.status(),
+    manager.submit({ cwd: root, prompt: '{}' }),
+    manager.submit({ cwd: root, prompt: '{}' }),
+  ];
+  const simultaneous = count;
+  for (const release of releases) release();
+  await Promise.all(requests);
+  assert.equal(simultaneous, 1);
+  manager.health = async () => {
+    count++;
+    return { available: true, checked_at: '' };
+  };
+  await manager.status();
+  assert.equal(count, 2);
+});
+
+test('events arriving during query I/O are not skipped by its cursor', async (t) => {
+  const { manager, submit } = await setup(t);
+  const job = await submit({ delay: 200, answer: 'late event' });
+  const ceiling = manager.get(job.task.id).event_count;
+  const read = manager.store.events.bind(manager.store);
+  let release;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  let reading = false;
+  manager.store.events = async (...args) => {
+    const events = await read(...args);
+    reading = true;
+    await gate;
+    return events;
+  };
+  const pending = manager.query(job.task.id, ceiling);
+  await until(() => reading && manager.get(job.task.id).state === 'succeeded');
+  release();
+  const first = await pending;
+  assert.equal(first.next_cursor, ceiling);
+  manager.store.events = read;
+  const next = await manager.query(job.task.id, first.next_cursor);
+  assert.ok(next.events.some((event) => event.type === 'turn.completed'));
+});
+
 test('four independent workers start before a fifth queued worker', async (t) => {
   const { manager, submit } = await setup(t);
   const jobs = await Promise.all(

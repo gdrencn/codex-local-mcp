@@ -39,6 +39,8 @@ export interface Task {
   started_at: string | null;
   ended_at: string | null;
   pid: number | null;
+  pid_start?: string | null;
+  pid_boot?: string | null;
   exit_code: number | null;
   exit_signal: string | null;
   final_message: string | null;

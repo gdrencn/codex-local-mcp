@@ -1,4 +1,4 @@
-import { accessSync, constants, realpathSync } from 'node:fs';
+import { accessSync, constants, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { delimiter, isAbsolute, join, resolve } from 'node:path';
 
@@ -13,6 +13,7 @@ export interface Config {
   healthTimeoutMs: number;
   maxLogBytes: number;
   mcpServerId: string;
+  backendIdleMs: number;
 }
 
 function integer(
@@ -60,6 +61,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     healthTimeoutMs: integer(env, 'CODEX_LOCAL_MCP_HEALTH_TIMEOUT_MS', 3000, 50, 30000),
     maxLogBytes: integer(env, 'CODEX_LOCAL_MCP_MAX_LOG_BYTES', 16777216, 4096, 1073741824),
     mcpServerId,
+    backendIdleMs: integer(env, 'CODEX_LOCAL_MCP_BACKEND_IDLE_MS', 60000, 100, 86400000),
   };
 }
 
@@ -71,6 +73,7 @@ export function resolveExecutable(binary: string, path = process.env.PATH ?? '')
   for (const candidate of candidates) {
     try {
       accessSync(candidate, constants.X_OK);
+      if (!statSync(candidate).isFile()) continue;
       return realpathSync(candidate);
     } catch {
       /* Try the next PATH entry. */

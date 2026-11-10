@@ -7,6 +7,8 @@ import { join, resolve } from 'node:path';
 import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import { fixture, until } from './helpers.mjs';
+import { loadConfig } from '../dist/config.js';
+import { stopBackend } from '../dist/backend-client.js';
 
 test('official SDK client initializes stdio, lists tools, runs jobs, and reads structured errors', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'codex-local-mcp-wire-'));
@@ -31,6 +33,7 @@ test('official SDK client initializes stdio, lists tools, runs jobs, and reads s
   const client = new Client({ name: 'codex-local-mcp-test', version: '1.0.0' });
   t.after(async () => {
     await client.close();
+    await stopBackend(loadConfig({ ...process.env, CODEX_LOCAL_MCP_DATA_DIR: join(root, 'data') }));
     await new Promise((resolve) => health.close(resolve));
     await rm(root, { recursive: true, force: true });
   });

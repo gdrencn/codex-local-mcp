@@ -1,5 +1,17 @@
 # Requirements
 
+## Follow-up stage: comprehensive verification and multi-conversation use
+
+The user authorizes comprehensive use/testing, code improvements, registration in local Codex, and instructions for other conversations. These requirements supersede the initial standalone-stdio lifecycle and registration exclusions below.
+
+- Multiple MCP clients using the same data directory must share a single local scheduler, task history, and concurrency limit of four by default. A second conversation must not fail on the data-directory lock or silently create four additional global slots.
+- Each conversation uses stdio as before. A local Unix-socket backend is started automatically when needed. Disconnection of one client does not cancel another client's tasks. Unattended tasks can finish after their submitting client disconnects.
+- Keep domain/scheduling, persistence, IPC, and MCP adapters separate. Validate the local IPC contract and reject incompatible client/backend configurations explicitly. Do not expose a network listener.
+- Shut down an idle backend after a configurable idle interval; provide an explicit backend-stop command for upgrades. Graceful backend stop terminates owned workers and preserves terminal state. Restart recovers unfinished tasks without replay.
+- Extend tests to cover all five tools, shared limits across clients, reconnects, restart, pagination and long polling, cancellation and timeout isolation, error handling, and real local file/image/edit/session tasks.
+- Review and optimize inefficient or unsafe code paths discovered during testing. Verify the configured MCP from an actual fresh Codex process, not only an SDK test client.
+- Register the verified build in user-level Codex configuration without altering the user's model/account settings. Record tests and actual configuration changes in IMPLEMENTED.md; keep machine-specific configuration outside the public repository. Explain reopening/restarting existing conversations and give a reusable delegation prompt.
+
 ## Scope
 
 Implement a modular local stdio MCP server named `codex-local-mcp`, verify it, and publish it as a public GitHub repository under the authenticated account. The server delegates to the existing `codex-local` executable. It does not implement model inference or replace Codex's tool loop. Registering it in the user's main Codex configuration is outside this implementation stage; provide ready-to-use configuration instructions.

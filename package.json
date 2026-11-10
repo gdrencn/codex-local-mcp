@@ -1,6 +1,6 @@
 {
   "name": "codex-local-mcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Parallel local Codex workers through a small stdio MCP server",
   "type": "module",
   "license": "MIT",
@@ -27,7 +27,8 @@
     "test:live": "npm run build && node test/live.mjs",
     "prepack": "npm run build",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "test:native": "npm run build && node test/native-client.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/server": "2.4.0",
